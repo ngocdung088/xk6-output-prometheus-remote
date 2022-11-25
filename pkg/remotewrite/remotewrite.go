@@ -19,10 +19,11 @@ var _ output.Output = new(Output)
 type Output struct {
 	output.SampleBuffer
 
-	config          Config
-	logger          logrus.FieldLogger
-	periodicFlusher *output.PeriodicFlusher
-	tsdb            map[metrics.TimeSeries]*seriesWithMeasure
+	config             Config
+	logger             logrus.FieldLogger
+	periodicFlusher    *output.PeriodicFlusher
+	tsdb               map[metrics.TimeSeries]*seriesWithMeasure
+	trendStatsResolver map[string]func(*metrics.TrendSink) float64
 
 	// TODO: copy the prometheus/remote.WriteClient interface and depend on it
 	client *remote.WriteClient
@@ -46,12 +47,21 @@ func New(params output.Params) (*Output, error) {
 		return nil, fmt.Errorf("failed to initialize the Prometheus remote write client: %w", err)
 	}
 
-	return &Output{
+	o := &Output{
 		client: wc,
 		config: config,
 		logger: logger,
 		tsdb:   make(map[metrics.TimeSeries]*seriesWithMeasure),
-	}, nil
+	}
+
+	if len(config.TrendStats) > 0 {
+		resolvers, err := metrics.GetResolversForTrendColumns(config.TrendStats)
+		if err != nil {
+			return nil, err
+		}
+		o.trendStatsResolver = resolvers
+	}
+	return o, nil
 }
 
 func (o *Output) Description() string {
@@ -138,7 +148,8 @@ func (o *Output) convertToPbSeries(samplesContainers []metrics.SampleContainer) 
 			truncTime := sample.Time.Truncate(time.Millisecond)
 			swm, ok := o.tsdb[sample.TimeSeries]
 			if !ok {
-				swm = newSeriesWithMeasure(sample.TimeSeries, o.config.TrendAsNativeHistogram.Bool)
+				// TODO: encapsulate the trend arguments into a Trend Mapping factory
+				swm = newSeriesWithMeasure(sample.TimeSeries, o.config.TrendAsNativeHistogram.Bool, o.trendStatsResolver)
 				swm.Latest = truncTime
 				o.tsdb[sample.TimeSeries] = swm
 				seen[sample.TimeSeries] = struct{}{}
@@ -248,7 +259,7 @@ type prompbMapper interface {
 	MapPrompb(series metrics.TimeSeries, t time.Time) []*prompb.TimeSeries
 }
 
-func newSeriesWithMeasure(series metrics.TimeSeries, trendAsNativeHistogram bool) *seriesWithMeasure {
+func newSeriesWithMeasure(series metrics.TimeSeries, trendAsNativeHistogram bool, tsr TrendStatsResolver) *seriesWithMeasure {
 	var sink metrics.Sink
 	switch series.Metric.Type {
 	case metrics.Counter:
@@ -256,10 +267,16 @@ func newSeriesWithMeasure(series metrics.TimeSeries, trendAsNativeHistogram bool
 	case metrics.Gauge:
 		sink = &metrics.GaugeSink{}
 	case metrics.Trend:
+		// TODO: refactor encapsulating in a factory method
 		if trendAsNativeHistogram {
 			sink = newNativeHistogramSink(series.Metric)
 		} else {
-			sink = newExtendedTrendSink()
+			var err error
+			sink, err = newExtendedTrendSink(tsr)
+			if err != nil {
+				// the resolver must be already validated
+				panic(err)
+			}
 		}
 	case metrics.Rate:
 		sink = &metrics.RateSink{}

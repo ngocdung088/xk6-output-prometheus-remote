@@ -32,22 +32,26 @@ func TestExtendedTrendSinkMapPrompb(t *testing.T) {
 	}
 
 	expected := []*prompb.TimeSeries{
-		buildTimeSeries("k6_test_count", 1.0, now),
-		buildTimeSeries("k6_test_sum", 1.0, now),
-		buildTimeSeries("k6_test_min", 1.0, now),
-		buildTimeSeries("k6_test_max", 1.0, now),
 		buildTimeSeries("k6_test_avg", 1.0, now),
+		buildTimeSeries("k6_test_count", 1.0, now),
+		buildTimeSeries("k6_test_max", 1.0, now),
 		buildTimeSeries("k6_test_med", 1.0, now),
+		buildTimeSeries("k6_test_min", 1.0, now),
 		buildTimeSeries("k6_test_p90", 1.0, now),
 		buildTimeSeries("k6_test_p95", 1.0, now),
+		// buildTimeSeries("k6_test_sum", 1.0, now),
 	}
-
-	st := newExtendedTrendSink()
+	resolver, err := metrics.GetResolversForTrendColumns([]string{"count" /*"sum",*/, "min", "max", "avg", "med", "p(90)", "p(95)"})
+	require.NoError(t, err)
+	st, err := newExtendedTrendSink(resolver)
+	require.NoError(t, err)
 	st.Add(sample)
 	require.Equal(t, st.Count, uint64(1))
 
 	ts := st.MapPrompb(sample.TimeSeries, sample.Time)
-	require.Len(t, ts, 8)
+	require.Len(t, ts, 7) // TODO: 8 with Sum
+
+	sortByNameLabel(ts)
 	assertTimeSeriesEqual(t, expected, ts)
 }
 
