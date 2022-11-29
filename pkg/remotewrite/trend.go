@@ -50,14 +50,23 @@ func (sink *extendedTrendSink) MapPrompb(series metrics.TimeSeries, t time.Time)
 	}
 	tg.CacheNameIndex()
 
+	isTime := series.Metric.Contains == metrics.Time
+
 	for stat, statfn := range sink.trendStats {
 		if !strings.HasPrefix(stat, "p(") {
-			tg.Append(stat, statfn(sink.TrendSink))
+			tg.Append(stat, sink.adaptUnit(statfn(sink.TrendSink), isTime))
 			continue
 		}
-		tg.Append("p"+stat[2:len(stat)-1], statfn(sink.TrendSink))
+		tg.Append("p"+stat[2:len(stat)-1], sink.adaptUnit(statfn(sink.TrendSink), isTime))
 	}
 	return tg.series
+}
+
+func (sink *extendedTrendSink) adaptUnit(v float64, isTime bool) float64 {
+	if isTime {
+		return v / 1000
+	}
+	return v
 }
 
 type trendAsGauges struct {
