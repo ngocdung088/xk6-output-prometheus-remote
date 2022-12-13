@@ -22,7 +22,14 @@ var (
 	// staleNaN is the Prometheus special value for marking
 	// a time series as stale.
 	//
+	// Check https://www.robustperception.io/staleness-and-promql for details
+	// about the Prometheus staleness markers.
+	//
+	// The value is the same used by the Prometheus package.
 	// https://pkg.go.dev/github.com/prometheus/prometheus/pkg/value#pkg-constants
+	// It isn't imported directly for avoiding the direct dependency
+	// from the big Prometheus project that would bring more
+	// dependencies.
 	staleNaN = math.Float64frombits(0x7ff0000000000002)
 )
 
@@ -92,7 +99,12 @@ func (o *Output) Stop() error {
 	defer o.logger.Debug("Output stopped")
 	o.periodicFlusher.Stop()
 
-	staleMarkers := o.staleMarkers(time.Now())
+	// Add 1ms so in the extreme case
+	// that the time frame between the last
+	// and the current flush operations is under-millisecond then
+	// we can avoid that the flush is seen as duplicate keeping the accuracy in the future.
+	timestamp := time.Now().Truncate(time.Millisecond).Add(1 * time.Millisecond)
+	staleMarkers := o.staleMarkers(timestamp)
 
 	if len(staleMarkers) < 1 {
 		o.logger.Debug("No time series to mark as stale")
@@ -126,7 +138,7 @@ func (o *Output) staleMarkers(t time.Time) []*prompb.TimeSeries {
 				s.Samples = append(s.Samples, &prompb.Sample{})
 			}
 
-			s.Samples[0].Value = staleNaN
+			s.Samples[0].Value = math.Float64frombits(0x7ff0000000000002)
 			s.Samples[0].Timestamp = timestamp
 		}
 		staleMarkers = append(staleMarkers, series...)

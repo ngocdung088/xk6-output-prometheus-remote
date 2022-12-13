@@ -3,15 +3,18 @@ package remote
 import (
 	"context"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
 	"time"
 
+	"github.com/golang/snappy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	prompb "go.buf.build/grpc/go/prometheus/prometheus"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestNewWrtiteClient(t *testing.T) {
@@ -169,6 +172,38 @@ func TestNewWriteRequestBody(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, string(b))
 	assert.Contains(t, string(b), `label1`)
+}
+
+func TestNewWriteRequestBodyWithStaleMarker(t *testing.T) {
+	timestamp := time.Date(2022, time.December, 12, 3, 41, 19, 123, time.UTC)
+	ts := []*prompb.TimeSeries{
+		{
+			Labels: []*prompb.Label{{Name: "label1", Value: "val1"}},
+			Samples: []*prompb.Sample{{
+				Value:     math.Float64frombits(0x7ff0000000000002),
+				Timestamp: timestamp.UnixMilli(),
+			}},
+		},
+	}
+	b, err := newWriteRequestBody(ts)
+	require.NoError(t, err)
+	require.NotEmpty(t, b)
+
+	sb, err := snappy.Decode(nil, b)
+	require.NoError(t, err)
+
+	var series prompb.WriteRequest
+	err = proto.Unmarshal(sb, &series)
+	require.NoError(t, err)
+
+	isStaleNaN := func(v float64) bool {
+		return math.Float64bits(v) == uint64(0x7ff0000000000002)
+	}
+	assert.True(t, math.IsNaN(series.Timeseries[0].Samples[0].Value))
+	assert.True(t, isStaleNaN(series.Timeseries[0].Samples[0].Value))
+
+	expts := 1670856079123
+	assert.Equal(t, expts, series.Timeseries[0].Samples[0].Timestamp)
 }
 
 func TestValidateStatusCode(t *testing.T) {
